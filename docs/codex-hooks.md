@@ -1,11 +1,44 @@
 # Codex Stop verification gate
 
-This is an opt-in Codex adaptation of `bin/gstack-verify-gate`, not a default
+This is a Codex adaptation of `bin/gstack-verify-gate`, not a default
 part of `./setup`. It uses the native `Stop` hook supported by Codex CLI
 0.156.1. `SessionEnd` is advisory and cannot keep a turn open; do not use it
 for verification.
 
-## Contract
+## Global installation
+
+Register the adapter once in `~/.codex/hooks.json` using an absolute path to
+this checkout and the `--global` argument:
+
+```json
+{
+  "hooks": {
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "/absolute/path/to/gstack/hosts/codex/hooks/stop-verify --global",
+        "timeout": 60
+      }]
+    }]
+  }
+}
+```
+
+Merge with existing global hooks rather than replacing them. Review and trust
+the new entry in Codex `/hooks`, then start a new session. To uninstall,
+remove only this handler from `~/.codex/hooks.json`; keep other hooks and
+plugin trust settings. Do not also register the project-local handler below
+for the same repository, or its check can run twice.
+
+Global registration makes the hook available in every Codex session. It
+**enforces verification only in Git repositories whose root `AGENTS.md`
+contains a `gstack:verify:` declaration**. It silently skips projectless
+sessions and repositories without a declaration. A skip is not verification
+success. Once a declaration exists, an empty or untrusted command is a
+failure, not a skip. Each declared command still needs explicit per-repository
+trust with `bin/gstack-verify-gate --codex --trust`.
+
+## Project-local installation and contract
 
 1. At the Git repository root, declare one verification command in `AGENTS.md`:
    `<!-- gstack:verify: bun test -->`. No declaration is **unverified**, never
@@ -74,5 +107,12 @@ On macOS with Codex CLI 0.156.1, the fail → continue → fix → pass cycle wa
 reproduced in an isolated fixture both before and after normal `/hooks` trust.
 The first automated run bypassed hook trust solely for that vetted fixture;
 the second used normal trust with no bypass flag. The persistent-failure run
-also stopped after three continuations and reported RED. This does not install
-the hook globally or prove behavior on other Codex versions.
+also stopped after three continuations and reported RED. Those initial runs
+used only the project-local hook.
+
+The global variant was then registered and trusted in `~/.codex/hooks.json`.
+With the fixture's project-local hook removed, a fresh Codex session again
+failed, continued, fixed `READY`, and passed using the global hook alone. A
+fresh session in a Git repository without any declaration finished normally
+and created no verification state or log. Other Codex versions remain
+unverified.

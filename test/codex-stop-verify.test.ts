@@ -37,8 +37,8 @@ function trust() {
   });
 }
 
-function stop(active = false, session = 'session-1', extraEnv: Record<string, string> = {}) {
-  const result = spawnSync(hook, {
+function stop(active = false, session = 'session-1', extraEnv: Record<string, string> = {}, globalMode = false) {
+  const result = spawnSync(hook, globalMode ? ['--global'] : [], {
     cwd: project,
     env: { ...process.env, GSTACK_HOME: home, ...extraEnv },
     input: JSON.stringify({ hook_event_name: 'Stop', cwd: project, session_id: session, turn_id: 'turn-1', stop_hook_active: active }),
@@ -54,6 +54,26 @@ function logs(): string[] {
 }
 
 describe('Codex Stop adapter using the existing gate', () => {
+  test('global registration skips projectless sessions and repos without a declaration', () => {
+    rmSync(join(project, '.git'), { recursive: true });
+    expect(stop(false, 'outside', {}, true)).toEqual({});
+    expect(logs()).toHaveLength(0);
+    expect(spawnSync('git', ['init', '--quiet', project]).status).toBe(0);
+    expect(stop(false, 'no-doc', {}, true)).toEqual({});
+    writeFileSync(join(project, 'AGENTS.md'), '# No verification declared\n');
+    expect(stop(false, 'no-marker', {}, true)).toEqual({});
+    expect(logs()).toHaveLength(0);
+  });
+
+  test('global registration enforces an explicit declaration without changing local mode', () => {
+    declareCheck(); check();
+    expect(trust().status).toBe(0);
+    expect(stop(false, 'global-check', {}, true).decision).toBe('block');
+    check('echo global pass; exit 0');
+    expect(stop(true, 'global-check', {}, true)).toEqual({});
+    expect(logs()).toHaveLength(2);
+  });
+
   test('a user-declared, trusted passing command allows Stop and keeps a result log', () => {
     declareCheck(); check('echo check passed; exit 0');
     expect(existsSync(join(project, 'AGENTS.md'))).toBe(true);

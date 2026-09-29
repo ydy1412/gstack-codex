@@ -7,18 +7,34 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const gate = resolve(import.meta.dir, '../../../bin/gstack-verify-gate');
+const globalMode = process.argv.includes('--global');
 const input = await Bun.stdin.text();
 let event: { cwd?: string; session_id?: string; stop_hook_active?: boolean };
 try {
   event = JSON.parse(input);
   if (!event.cwd || !event.session_id) throw new Error('missing cwd or session_id');
 } catch {
-  console.log(JSON.stringify({ decision: 'block', reason: 'gstack verification: invalid Codex Stop input; cannot verify.' }));
+  console.log(JSON.stringify(globalMode
+    ? { systemMessage: 'gstack verification: invalid Codex Stop input; no check ran.' }
+    : { decision: 'block', reason: 'gstack verification: invalid Codex Stop input; cannot verify.' }));
   process.exit(0);
 }
 
 const rootResult = spawnSync('git', ['-C', event.cwd!, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 3000 });
 const hasGitRoot = rootResult.status === 0;
+if (globalMode) {
+  if (!hasGitRoot) {
+    console.log('{}');
+    process.exit(0);
+  }
+  const document = join(rootResult.stdout.trim(), 'AGENTS.md');
+  let declared = false;
+  try { declared = /^[ \t]*(?:<!--[ \t]*)?gstack:verify:/m.test(readFileSync(document, 'utf8')); } catch { /* no project declaration */ }
+  if (!declared) {
+    console.log('{}');
+    process.exit(0);
+  }
+}
 const root = realpathSync(hasGitRoot ? rootResult.stdout.trim() : event.cwd!);
 const home = process.env.GSTACK_HOME || join(homedir(), '.gstack');
 const stateDir = join(home, 'verify-gate-codex', createHash('sha256').update(root + '\0' + event.session_id).digest('hex'));
