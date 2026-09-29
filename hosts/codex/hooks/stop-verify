@@ -46,7 +46,7 @@ if (event.stop_hook_active) {
 }
 
 const timeout = Number(process.env.GSTACK_VERIFY_TIMEOUT_MS || 50_000);
-const result = hasGitRoot ? spawnSync(gate, ['--codex'], {
+const result = hasGitRoot ? spawnSync(gate, ['--codex-check'], {
   cwd: root,
   env: process.env,
   input,

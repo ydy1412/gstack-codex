@@ -27,6 +27,14 @@ HOST=claude
 if [ "${1:-}" = "--codex" ]; then
   HOST=codex
   shift
+  if [ "${1:-}" != "--trust" ]; then
+    # Codex's Stop protocol needs JSON output; keep the established gate as
+    # the public hook while the adapter translates the host-specific payload.
+    exec "$(cd "$(dirname "$0")/.." && pwd)/hosts/codex/hooks/stop-verify" --global
+  fi
+elif [ "${1:-}" = "--codex-check" ]; then
+  HOST=codex
+  shift
 fi
 DOC=CLAUDE.md
 [ "$HOST" = codex ] && DOC=AGENTS.md

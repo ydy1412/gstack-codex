@@ -1,14 +1,15 @@
 # Codex Stop verification gate
 
-This is a Codex adaptation of `bin/gstack-verify-gate`, not a default
-part of `./setup`. It uses the native `Stop` hook supported by Codex CLI
-0.156.1. `SessionEnd` is advisory and cannot keep a turn open; do not use it
-for verification.
+The existing `bin/gstack-verify-gate` is the Codex Stop hook entry point;
+its Codex mode delegates only payload translation to the internal adapter.
+This is not a default part of `./setup`. It uses the native `Stop` hook
+supported by Codex CLI 0.156.1. `SessionEnd` is advisory and cannot keep a
+turn open; do not use it for verification.
 
 ## Global installation
 
-Register the adapter once in `~/.codex/hooks.json` using an absolute path to
-this checkout and the `--global` argument:
+Register the existing gate once in `~/.codex/hooks.json` using an absolute
+path to this checkout and its `--codex` mode:
 
 ```json
 {
@@ -16,7 +17,7 @@ this checkout and the `--global` argument:
     "Stop": [{
       "hooks": [{
         "type": "command",
-        "command": "/absolute/path/to/gstack/hosts/codex/hooks/stop-verify --global",
+        "command": "/absolute/path/to/gstack/bin/gstack-verify-gate --codex",
         "timeout": 60
       }]
     }]
@@ -87,8 +88,8 @@ the user but contain the command's stdout and stderr.
 
 Run `bun test test/verify-gate.test.ts test/codex-stop-verify.test.ts` for
 trusted pass, failure/re-entry, missing/untrusted configuration, timeout, and
-bounded failure. A live Codex session must separately demonstrate that a
-trusted project hook actually fires, continues after failure, and completes
+bounded failure. A live Codex session must separately demonstrate that the
+trusted hook actually fires, continues after failure, and completes
 only after a corrected check. Unit tests alone do not prove hook trust or
 runtime behavior.
 
@@ -110,9 +111,10 @@ the second used normal trust with no bypass flag. The persistent-failure run
 also stopped after three continuations and reported RED. Those initial runs
 used only the project-local hook.
 
-The global variant was then registered and trusted in `~/.codex/hooks.json`.
-With the fixture's project-local hook removed, a fresh Codex session again
-failed, continued, fixed `READY`, and passed using the global hook alone. A
-fresh session in a Git repository without any declaration finished normally
-and created no verification state or log. Other Codex versions remain
-unverified.
+The global `bin/gstack-verify-gate --codex` entry point was then registered
+and trusted in `~/.codex/hooks.json`. With the fixture's project-local hook
+removed, a fresh Codex session first answered `DONE`, received a Stop block,
+created `READY`, and finished only after the same existing gate passed. Its
+two logs recorded exit codes 2 and 0. A fresh session in a Git repository
+without any declaration finished normally and created no verification state
+or log. Other Codex versions remain unverified.

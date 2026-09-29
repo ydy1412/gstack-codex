@@ -38,7 +38,7 @@ function trust() {
 }
 
 function stop(active = false, session = 'session-1', extraEnv: Record<string, string> = {}, globalMode = false) {
-  const result = spawnSync(hook, globalMode ? ['--global'] : [], {
+  const result = spawnSync(globalMode ? gate : hook, globalMode ? ['--codex'] : [], {
     cwd: project,
     env: { ...process.env, GSTACK_HOME: home, ...extraEnv },
     input: JSON.stringify({ hook_event_name: 'Stop', cwd: project, session_id: session, turn_id: 'turn-1', stop_hook_active: active }),
