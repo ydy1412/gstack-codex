@@ -1,0 +1,63 @@
+#!/usr/bin/env bun
+// Codex Stop adapter for the existing trusted gstack verification gate.
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
+
+const gate = resolve(import.meta.dir, '../../../bin/gstack-verify-gate');
+const input = await Bun.stdin.text();
+let event: { cwd?: string; session_id?: string; stop_hook_active?: boolean };
+try {
+  event = JSON.parse(input);
+  if (!event.cwd || !event.session_id) throw new Error('missing cwd or session_id');
+} catch {
+  console.log(JSON.stringify({ decision: 'block', reason: 'gstack verification: invalid Codex Stop input; cannot verify.' }));
+  process.exit(0);
+}
+
+const rootResult = spawnSync('git', ['-C', event.cwd!, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 3000 });
+const hasGitRoot = rootResult.status === 0;
+const root = realpathSync(hasGitRoot ? rootResult.stdout.trim() : event.cwd!);
+const home = process.env.GSTACK_HOME || join(homedir(), '.gstack');
+const stateDir = join(home, 'verify-gate-codex', createHash('sha256').update(root + '\0' + event.session_id).digest('hex'));
+const counterPath = join(stateDir, 'attempts');
+mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+let attempts = 0;
+if (event.stop_hook_active) {
+  try { attempts = Number(readFileSync(counterPath, 'utf8')) || 0; } catch { /* new episode */ }
+}
+
+const timeout = Number(process.env.GSTACK_VERIFY_TIMEOUT_MS || 50_000);
+const result = hasGitRoot ? spawnSync(gate, ['--codex'], {
+  cwd: root,
+  env: process.env,
+  input,
+  encoding: 'utf8',
+  timeout: Number.isFinite(timeout) && timeout > 0 ? timeout : 50_000,
+  maxBuffer: 16 * 1024 * 1024,
+}) : { status: 2, error: undefined, stdout: '', stderr: 'gstack verification: no Git repository root; cannot verify.' };
+const log = join(stateDir, `attempt-${attempts + 1}-${Date.now()}.log`);
+writeFileSync(log, `exit=${result.status ?? 'none'} error=${result.error?.message || 'none'}\n${result.stdout || ''}${result.stderr || ''}`, { mode: 0o600 });
+
+if (result.status === 0 && !result.error) {
+  rmSync(counterPath, { force: true });
+  console.log('{}');
+  process.exit(0);
+}
+
+attempts += 1;
+const detail = (result.stderr || result.error?.message || 'verification command failed').trim().slice(-1800);
+if (attempts <= 3) {
+  writeFileSync(counterPath, String(attempts), { mode: 0o600 });
+  console.log(JSON.stringify({
+    decision: 'block',
+    reason: `gstack verification RED (${attempts}/3): ${detail}\nFull log: ${log}\nFix and rerun the check. If it cannot pass, report failure; do not claim completion.`,
+  }));
+} else {
+  rmSync(counterPath, { force: true });
+  console.log(JSON.stringify({
+    systemMessage: `gstack verification RED after 3 continuations. Check remains failing; this turn is unverified. Log: ${log}`,
+  }));
+}

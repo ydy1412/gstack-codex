@@ -5,22 +5,31 @@
 # Declare the command on one line in the project's CLAUDE.md:
 #   <!-- gstack:verify: bun test -->
 #
-# Read-or-ask: gstack never invents this command. No declaration, no gate.
-# Fails open on every absence (no CLAUDE.md, no declaration, empty value).
+# Read-or-ask: gstack never invents this command. Claude mode fails open when
+# absent; --codex reads AGENTS.md at the Git root and fails closed when absent.
 #
 # Trust boundary: hooks bypass the permission system, so a declared command
 # NEVER runs until the user records it in the per-repo trust store:
-#   gstack-verify-gate --trust        (run from inside the repo)
+#   gstack-verify-gate --trust          (Claude, run inside repo)
+#   gstack-verify-gate --codex --trust  (Codex, run inside repo)
 # The store maps realpath(repo root) -> sha256(command) at
 # ${GSTACK_HOME:-$HOME/.gstack}/verify-gate-trust (flat "path<TAB>hash",
 # 0600, atomic rewrite). Any edit to the declared command invalidates trust
 # until --trust is run again. Untrusted commands never block the turn.
 #
 # Exit 0 = allow the turn to end, one-line reason on stdout.
-# Exit 2 = block, Claude Code feeds stderr back to the agent.
+# Exit 2 = block, with the reason on stderr. The Codex adapter translates it.
 #
 # Remove with: gstack-settings-hook remove-source --source verify-gate
 set -uo pipefail
+
+HOST=claude
+if [ "${1:-}" = "--codex" ]; then
+  HOST=codex
+  shift
+fi
+DOC=CLAUDE.md
+[ "$HOST" = codex ] && DOC=AGENTS.md
 
 TAB="$(printf '\t')"
 STORE="${GSTACK_HOME:-$HOME/.gstack}/verify-gate-trust"
@@ -35,19 +44,22 @@ _sha256() {
   fi
 }
 
-# Resolve the project root: CLAUDE_PROJECT_DIR, else walk up from $PWD to
-# the first directory containing CLAUDE.md. Sets ROOT (may lack CLAUDE.md).
+# Resolve the project root. Claude walks to CLAUDE.md; Codex uses the Git root.
 _resolve_root() {
+  if [ "$HOST" = codex ]; then
+    ROOT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || ROOT="$PWD"
+    return
+  fi
   ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
   while [ ! -f "$ROOT/CLAUDE.md" ] && [ "$ROOT" != "/" ]; do
     ROOT="$(dirname "$ROOT")"
   done
 }
 
-# Extract the declared command from $ROOT/CLAUDE.md into CMD (may be empty).
+# Extract the declared command from the selected project document into CMD.
 # Accepts both `<!-- gstack:verify: cmd -->` and bare `gstack:verify: cmd`.
 _extract_cmd() {
-  CMD="$(sed -n 's/^[[:space:]]*\(<!--[[:space:]]*\)\{0,1\}gstack:verify:[[:space:]]*\(.*\)$/\2/p' "$ROOT/CLAUDE.md" | head -1)"
+  CMD="$(sed -n 's/^[[:space:]]*\(<!--[[:space:]]*\)\{0,1\}gstack:verify:[[:space:]]*\(.*\)$/\2/p' "$ROOT/$DOC" | head -1)"
   CMD="${CMD%%-->*}"
   CMD="$(printf '%s' "$CMD" | tr -d '`' | sed 's/[[:space:]]*$//')"
 }
@@ -114,13 +126,13 @@ _log_trust_grant() {
 
 if [ "${1:-}" = "--trust" ]; then
   _resolve_root
-  if [ ! -f "$ROOT/CLAUDE.md" ]; then
-    echo "verify-gate: no CLAUDE.md above $PWD, nothing to trust." >&2
+  if [ ! -f "$ROOT/$DOC" ]; then
+    echo "verify-gate: no $DOC at $ROOT, nothing to trust." >&2
     exit 1
   fi
   _extract_cmd
   if [ -z "$CMD" ]; then
-    echo "verify-gate: $ROOT/CLAUDE.md declares no 'gstack:verify:' command, nothing to trust." >&2
+    echo "verify-gate: $ROOT/$DOC declares no 'gstack:verify:' command, nothing to trust." >&2
     exit 1
   fi
   KEY="$(_trust_key)"
@@ -146,7 +158,11 @@ fi
 
 _resolve_root
 
-if [ ! -f "$ROOT/CLAUDE.md" ]; then
+if [ ! -f "$ROOT/$DOC" ]; then
+  if [ "$HOST" = codex ]; then
+    echo "verify-gate: no $DOC at $ROOT; verification is unconfigured." >&2
+    exit 2
+  fi
   echo "verify-gate: no CLAUDE.md above $PWD, no check declared, allowing."
   exit 0
 fi
@@ -154,14 +170,19 @@ fi
 _extract_cmd
 
 if [ -z "$CMD" ]; then
+  if [ "$HOST" = codex ]; then
+    echo "verify-gate: $ROOT/$DOC declares no 'gstack:verify:' command; verification is unconfigured." >&2
+    exit 2
+  fi
   echo "verify-gate: $ROOT/CLAUDE.md declares no 'gstack:verify:' command, allowing."
   exit 0
 fi
 
 # Trust gate: never execute a declared command the user has not recorded.
-# Applies on re-entry too — untrusted commands keep the exit-0-with-hint path.
+# Applies on re-entry too. Claude keeps the exit-0-with-hint path; Codex blocks.
 if [ "$(_trusted_hash "$(_trust_key)" || true)" != "$(_sha256 "$CMD")" ]; then
-  echo "verify-gate: found '$CMD' in $ROOT/CLAUDE.md but it is not trusted yet, skipping; enable with: cd $ROOT && $0 --trust" >&2
+  echo "verify-gate: found '$CMD' in $ROOT/$DOC but it is not trusted yet, skipping; enable with: cd $ROOT && $0 $([ "$HOST" = codex ] && printf '%s' '--codex ')--trust" >&2
+  [ "$HOST" = codex ] && exit 2
   echo "verify-gate: declared command not trusted, allowing."
   exit 0
 fi
@@ -190,6 +211,12 @@ if [ "$STATUS" -eq 0 ]; then
   rm -f "$COUNTER" 2>/dev/null || true
   echo "verify-gate: declared check passed ($CMD)."
   exit 0
+fi
+
+if [ "$HOST" = codex ]; then
+  echo "verify-gate: declared check FAILED with exit $STATUS: $CMD" >&2
+  printf '%s\n' "$OUT" >&2
+  exit 2
 fi
 
 if [ "$REENTRY" -eq 1 ]; then
